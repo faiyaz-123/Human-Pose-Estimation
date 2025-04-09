@@ -1,5 +1,4 @@
-streamlit
-opencv-python
-mediapipe
-numpy
-sqlite3
+streamlit>=1.22.0
+opencv-python>=4.6.0.66
+mediapipe>=0.10.0
+numpy>=1.23.5
