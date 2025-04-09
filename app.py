@@ -32,18 +32,6 @@ def initialize_database():
             last_login TIMESTAMP
         )
         ''')
-        
-        # Create sessions table for enhanced security
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            user_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id)
-        )
-        ''')
-        
         conn.commit()
     except sqlite3.Error as e:
         st.error(f"Database initialization error: {e}")
@@ -71,7 +59,6 @@ def set_page_config():
         initial_sidebar_state="expanded"
     )
     
-    # Enhanced CSS with dark theme
     st.markdown("""
     <style>
         .main { background-color: #f8f9fa; }
@@ -129,27 +116,23 @@ def set_page_config():
     </style>
     """, unsafe_allow_html=True)
 
-# Pose Calculation Functions
 def calculate_angle(a, b, c):
     """Calculate angle between three points"""
     ang = math.degrees(math.atan2(c.y - b.y, c.x - b.x) - math.atan2(a.y - b.y, a.x - b.x))
     return ang + 360 if ang < 0 else ang
 
-# Authentication Functions
 def authenticate_user(username, password):
     """Secure user authentication with hashed passwords"""
     try:
         conn = get_db_connection()
         user = conn.execute(
-            "SELECT * FROM users WHERE username = ?", 
+            "SELECT id, password_hash, salt FROM users WHERE username = ?", 
             (username,)
         ).fetchone()
         
         if user:
-            # Verify password hash
             input_hash = sha256((password + user['salt']).encode()).hexdigest()
             if input_hash == user['password_hash']:
-                # Update last login
                 conn.execute(
                     "UPDATE users SET last_login = ? WHERE id = ?",
                     (datetime.now(), user['id'])
@@ -169,14 +152,9 @@ def register_user(username, password):
     try:
         conn = get_db_connection()
         
-        # Check if username exists
-        if conn.execute(
-            "SELECT 1 FROM users WHERE username = ?", 
-            (username,)
-        ).fetchone():
+        if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             return False
             
-        # Hash password with new salt
         password_hash, salt = hash_password(password)
         
         conn.execute(
@@ -203,7 +181,6 @@ def users_exist():
         if conn:
             conn.close()
 
-# Page Components
 def login_page():
     """Login page with secure authentication"""
     st.markdown('<div class="dark-title"><h1>Welcome to Human Pose Estimation 🏋️</h1></div>', unsafe_allow_html=True)
@@ -216,8 +193,8 @@ def login_page():
                     width=300)
         with col2:
             st.markdown('<div class="exercise-title"><h3>Login to Your Account</h3></div>', unsafe_allow_html=True)
-            username = st.text_input("👤 Username")
-            password = st.text_input("🔒 Password", type="password")
+            username = st.text_input("👤 Username", key="login_username")
+            password = st.text_input("🔒 Password", type="password", key="login_password")
             
             if st.button("Login", key="login_btn"):
                 if authenticate_user(username, password):
@@ -246,9 +223,9 @@ def register_page():
                     width=300)
         with col2:
             st.markdown('<div class="exercise-title"><h3>Account Registration</h3></div>', unsafe_allow_html=True)
-            username = st.text_input("👤 Choose a username")
-            password = st.text_input("🔒 Choose a password", type="password")
-            confirm_password = st.text_input("🔒 Confirm password", type="password")
+            username = st.text_input("👤 Choose a username", key="reg_username")
+            password = st.text_input("🔒 Choose a password", type="password", key="reg_password")
+            confirm_password = st.text_input("🔒 Confirm password", type="password", key="confirm_password")
             
             if st.button("Register", key="register_btn"):
                 if password != confirm_password:
@@ -268,98 +245,9 @@ def register_page():
                 st.session_state.register_mode = False
                 st.rerun()
 
-def pose_estimation_page():
-    """Main pose estimation interface"""
-    st.markdown(f'<div class="dark-title"><h1>Hello, {st.session_state.username}! 👋</h1></div>', unsafe_allow_html=True)
-    st.markdown("---")
-    
-    # Exercise Selection
-    with st.container():
-        st.markdown('<div class="exercise-title"><h3>🏃 Choose Your Exercise</h3></div>', unsafe_allow_html=True)
-        exercise = st.selectbox("", ["Squats", "Hand Raises", "Yoga - Tree Pose", "Yoga - Warrior II"])
-        st.markdown(f"<div class='exercise-card'>"
-                   f"<h4>Current Exercise: {exercise}</h4>"
-                   f"<p>Follow the on-screen guidance</p></div>", 
-                   unsafe_allow_html=True)
-    
-    # Initialize session variables
-    if 'counter' not in st.session_state:
-        st.session_state.counter = 0
-    if 'webcam_active' not in st.session_state:
-        st.session_state.webcam_active = False
-    if 'squat_stage' not in st.session_state:
-        st.session_state.squat_stage = "up"
-    if 'handraise_stage' not in st.session_state:
-        st.session_state.handraise_stage = "down"
-    
-    # Counter Display
-    st.markdown(f"<div class='counter-display'>"
-               f"Rep Count: {st.session_state.counter}"
-               f"</div>", unsafe_allow_html=True)
-    
-    # Control Buttons
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("🎥 Start Webcam" if not st.session_state.webcam_active else "🛑 Stop Webcam"):
-            st.session_state.webcam_active = not st.session_state.webcam_active
-    with col2:
-        if st.button("🔁 Reset Counter"):
-            st.session_state.counter = 0
-    with col3:
-        if st.button("🚪 Logout"):
-            st.session_state.logged_in = False
-            st.session_state.username = None
-            st.success("Logged out successfully!")
-            st.rerun()
-    
-    # Webcam Processing
-    if st.session_state.webcam_active:
-        process_webcam_feed(exercise)
-
-def process_webcam_feed(exercise):
-    """Process real-time webcam feed for pose estimation"""
-    st.markdown("---")
-    st.markdown('<div class="exercise-title"><h3>🎥 Live Pose Detection</h3></div>', unsafe_allow_html=True)
-    
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    
-    video_placeholder = st.empty()
-    
-    while st.session_state.webcam_active:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Camera error")
-            break
-        
-        # Process frame with MediaPipe
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = pose.process(image)
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
-        if results.pose_landmarks:
-            process_pose_landmarks(results.pose_landmarks, exercise, image)
-            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-        
-        # Display counter on frame
-        cv2.putText(image, f"Reps: {st.session_state.counter}", (10, 30), 
-                   cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 0, 0), 2)
-        
-        # Show frame
-        video_placeholder.image(image, channels="BGR")
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
 def process_pose_landmarks(landmarks, exercise, image):
     """Process pose landmarks for specific exercises"""
     try:
-        # Get key points
         shoulder = landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
         hip = landmarks.landmark[mp_pose.PoseLandmark.LEFT_HIP.value]
         knee = landmarks.landmark[mp_pose.PoseLandmark.LEFT_KNEE.value]
@@ -375,8 +263,9 @@ def process_pose_landmarks(landmarks, exercise, image):
                 st.session_state.counter += 1
             
             feedback = "Lower!" if knee_angle < 90 else "Good!" if knee_angle > 160 else ""
-            cv2.putText(image, feedback, (image.shape[1] - 200, 50), 
-                       cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255) if knee_angle < 90 else (0, 255, 0), 2)
+            if feedback:
+                cv2.putText(image, feedback, (image.shape[1] - 200, 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255) if knee_angle < 90 else (0, 255, 0), 2)
 
         elif exercise == "Hand Raises":
             if wrist.y < shoulder.y:
@@ -388,20 +277,114 @@ def process_pose_landmarks(landmarks, exercise, image):
             
             feedback = "Raised!" if wrist.y < shoulder.y else "Lower Hands!"
             cv2.putText(image, feedback, (image.shape[1] - 200, 100), 
-                       cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0) if wrist.y < shoulder.y else (0, 0, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0) if wrist.y < shoulder.y else (0, 0, 255), 2)
 
     except Exception as e:
         st.error(f"Pose processing error: {e}")
 
-# Main Application
+def process_webcam_feed(exercise):
+    """Process webcam feed with cloud compatibility"""
+    if not st.runtime.exists():  # Local development
+        try:
+            cap = cv2.VideoCapture(0)
+            if not cap.isOpened():
+                st.error("Could not access webcam")
+                return
+        except:
+            st.error("Webcam access error")
+            return
+    else:  # Cloud environment
+        st.warning("Webcam access is limited in cloud deployments. Please upload a video file.")
+        uploaded_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi"])
+        
+        if not uploaded_file:
+            return
+            
+        with open("temp.mp4", "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        cap = cv2.VideoCapture("temp.mp4")
+    
+    video_placeholder = st.empty()
+    
+    while st.session_state.webcam_active:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(image)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        if results.pose_landmarks:
+            process_pose_landmarks(results.pose_landmarks, exercise, image)
+            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+        
+        cv2.putText(image, f"Reps: {st.session_state.counter}", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+        
+        video_placeholder.image(image, channels="BGR")
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    
+    cap.release()
+    if st.runtime.exists() and os.path.exists("temp.mp4"):
+        os.remove("temp.mp4")
+
+def pose_estimation_page():
+    """Main pose estimation interface"""
+    st.markdown(f'<div class="dark-title"><h1>Hello, {st.session_state.username}! 👋</h1></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    
+    with st.container():
+        st.markdown('<div class="exercise-title"><h3>🏃 Choose Your Exercise</h3></div>', unsafe_allow_html=True)
+        exercise = st.selectbox(
+            "Select Exercise", 
+            ["Squats", "Hand Raises", "Yoga - Tree Pose", "Yoga - Warrior II"],
+            key="exercise_select"
+        )
+        st.markdown(f"<div class='exercise-card'>"
+                   f"<h4>Current Exercise: {exercise}</h4>"
+                   f"<p>Follow the on-screen guidance</p></div>", 
+                   unsafe_allow_html=True)
+    
+    if 'counter' not in st.session_state:
+        st.session_state.counter = 0
+    if 'webcam_active' not in st.session_state:
+        st.session_state.webcam_active = False
+    if 'squat_stage' not in st.session_state:
+        st.session_state.squat_stage = "up"
+    if 'handraise_stage' not in st.session_state:
+        st.session_state.handraise_stage = "down"
+    
+    st.markdown(f"<div class='counter-display'>"
+               f"Rep Count: {st.session_state.counter}"
+               f"</div>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("🎥 Start Webcam" if not st.session_state.webcam_active else "🛑 Stop Webcam", key="webcam_btn"):
+            st.session_state.webcam_active = not st.session_state.webcam_active
+    with col2:
+        if st.button("🔁 Reset Counter", key="reset_btn"):
+            st.session_state.counter = 0
+    with col3:
+        if st.button("🚪 Logout", key="logout_btn"):
+            st.session_state.logged_in = False
+            st.session_state.username = None
+            st.success("Logged out successfully!")
+            st.rerun()
+    
+    if st.session_state.webcam_active:
+        process_webcam_feed(exercise)
+
 def main():
-    # Initialize database if needed
+    """Main application function"""
     if not os.path.exists(DB_PATH):
         initialize_database()
     
     set_page_config()
     
-    # Initialize session state
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     if 'username' not in st.session_state:
@@ -409,7 +392,6 @@ def main():
     if 'register_mode' not in st.session_state:
         st.session_state.register_mode = False
     
-    # Page routing
     if not st.session_state.logged_in:
         if st.session_state.register_mode or not users_exist():
             register_page()
