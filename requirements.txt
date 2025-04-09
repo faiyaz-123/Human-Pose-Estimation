@@ -2,4 +2,4 @@ streamlit==1.32.2
 opencv-python-headless==4.9.0.80
 mediapipe==0.10.21
 numpy==1.26.4
-protobuf==3.20.3
+protobuf>=4.25.3,<5  # Matches both packages' requirements
