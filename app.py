@@ -5,11 +5,62 @@ import math
 import time
 import sqlite3
 import os
+from hashlib import sha256
+from datetime import datetime
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 mp_drawing = mp.solutions.drawing_utils
+
+# Database Configuration
+DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+
+def initialize_database():
+    """Initialize the database with secure tables"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP
+        )
+        ''')
+        
+        # Create sessions table for enhanced security
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        ''')
+        
+        conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"Database initialization error: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+def get_db_connection():
+    """Get a secure database connection"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def hash_password(password, salt=None):
+    """Hash password with salt using SHA-256"""
+    salt = salt or os.urandom(16).hex()
+    return sha256((password + salt).encode()).hexdigest(), salt
 
 # Custom Page Configuration
 def set_page_config():
@@ -20,12 +71,10 @@ def set_page_config():
         initial_sidebar_state="expanded"
     )
     
-    # Enhanced CSS with dark title bars
+    # Enhanced CSS with dark theme
     st.markdown("""
     <style>
-        .main {
-            background-color: #f8f9fa;
-        }
+        .main { background-color: #f8f9fa; }
         .dark-title {
             background-color: #2c3e50;
             color: white;
@@ -54,14 +103,6 @@ def set_page_config():
             background-color: #45a049;
             transform: scale(1.02);
         }
-        .stTextInput>div>div>input {
-            border-radius: 8px;
-            padding: 8px;
-        }
-        .stSelectbox>div>div>select {
-            border-radius: 8px;
-            padding: 8px;
-        }
         .exercise-card {
             background: white;
             border-radius: 10px;
@@ -88,44 +129,83 @@ def set_page_config():
     </style>
     """, unsafe_allow_html=True)
 
-# Function to calculate angle between three points
+# Pose Calculation Functions
 def calculate_angle(a, b, c):
+    """Calculate angle between three points"""
     ang = math.degrees(math.atan2(c.y - b.y, c.x - b.x) - math.atan2(a.y - b.y, a.x - b.x))
     return ang + 360 if ang < 0 else ang
 
-# Database Functions
-def get_db_connection():
-    conn = sqlite3.connect("users.db")
-    conn.row_factory = sqlite3.Row
-    return conn
-
+# Authentication Functions
 def authenticate_user(username, password):
-    conn = get_db_connection()
-    user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    conn.close()
-    if user and user["password"] == password:
-        return True
-    return False
+    """Secure user authentication with hashed passwords"""
+    try:
+        conn = get_db_connection()
+        user = conn.execute(
+            "SELECT * FROM users WHERE username = ?", 
+            (username,)
+        ).fetchone()
+        
+        if user:
+            # Verify password hash
+            input_hash = sha256((password + user['salt']).encode()).hexdigest()
+            if input_hash == user['password_hash']:
+                # Update last login
+                conn.execute(
+                    "UPDATE users SET last_login = ? WHERE id = ?",
+                    (datetime.now(), user['id'])
+                )
+                conn.commit()
+                return True
+        return False
+    except sqlite3.Error as e:
+        st.error(f"Authentication error: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 def register_user(username, password):
-    conn = get_db_connection()
-    existing_user = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
-    if existing_user:
-        conn.close()
+    """Secure user registration with password hashing"""
+    try:
+        conn = get_db_connection()
+        
+        # Check if username exists
+        if conn.execute(
+            "SELECT 1 FROM users WHERE username = ?", 
+            (username,)
+        ).fetchone():
+            return False
+            
+        # Hash password with new salt
+        password_hash, salt = hash_password(password)
+        
+        conn.execute(
+            "INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)",
+            (username, password_hash, salt)
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as e:
+        st.error(f"Registration error: {e}")
         return False
-    conn.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
-    conn.commit()
-    conn.close()
-    return True
+    finally:
+        if conn:
+            conn.close()
 
 def users_exist():
-    conn = get_db_connection()
-    users = conn.execute("SELECT * FROM users").fetchall()
-    conn.close()
-    return len(users) > 0
+    """Check if any users exist in database"""
+    try:
+        conn = get_db_connection()
+        return conn.execute("SELECT 1 FROM users").fetchone() is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        if conn:
+            conn.close()
 
-# Enhanced UI Pages with Dark Titles
+# Page Components
 def login_page():
+    """Login page with secure authentication"""
     st.markdown('<div class="dark-title"><h1>Welcome to Human Pose Estimation 🏋️</h1></div>', unsafe_allow_html=True)
     st.markdown("---")
     
@@ -133,7 +213,7 @@ def login_page():
         col1, col2 = st.columns([1, 2])
         with col1:
             st.image("https://deeplobe.ai/wp-content/uploads/2023/04/Deeplobe-Pose-Detection-Yoga-Image-1024x683.png", 
-                      width=300)
+                    width=300)
         with col2:
             st.markdown('<div class="exercise-title"><h3>Login to Your Account</h3></div>', unsafe_allow_html=True)
             username = st.text_input("👤 Username")
@@ -155,6 +235,7 @@ def login_page():
                 st.rerun()
 
 def register_page():
+    """Secure user registration page"""
     st.markdown('<div class="dark-title"><h1>Create Your Account 🏆</h1></div>', unsafe_allow_html=True)
     st.markdown("---")
     
@@ -167,9 +248,14 @@ def register_page():
             st.markdown('<div class="exercise-title"><h3>Account Registration</h3></div>', unsafe_allow_html=True)
             username = st.text_input("👤 Choose a username")
             password = st.text_input("🔒 Choose a password", type="password")
+            confirm_password = st.text_input("🔒 Confirm password", type="password")
             
             if st.button("Register", key="register_btn"):
-                if register_user(username, password):
+                if password != confirm_password:
+                    st.error("Passwords don't match!")
+                elif len(password) < 8:
+                    st.error("Password must be at least 8 characters")
+                elif register_user(username, password):
                     st.success("Account created! Please login.")
                     st.session_state.register_mode = False
                     st.rerun()
@@ -183,10 +269,11 @@ def register_page():
                 st.rerun()
 
 def pose_estimation_page():
+    """Main pose estimation interface"""
     st.markdown(f'<div class="dark-title"><h1>Hello, {st.session_state.username}! 👋</h1></div>', unsafe_allow_html=True)
     st.markdown("---")
     
-    # Exercise Selection Card
+    # Exercise Selection
     with st.container():
         st.markdown('<div class="exercise-title"><h3>🏃 Choose Your Exercise</h3></div>', unsafe_allow_html=True)
         exercise = st.selectbox("", ["Squats", "Hand Raises", "Yoga - Tree Pose", "Yoga - Warrior II"])
@@ -195,7 +282,7 @@ def pose_estimation_page():
                    f"<p>Follow the on-screen guidance</p></div>", 
                    unsafe_allow_html=True)
     
-    # Initialize counters and stages
+    # Initialize session variables
     if 'counter' not in st.session_state:
         st.session_state.counter = 0
     if 'webcam_active' not in st.session_state:
@@ -225,129 +312,93 @@ def pose_estimation_page():
             st.success("Logged out successfully!")
             st.rerun()
     
-    # Webcam Feed
+    # Webcam Processing
     if st.session_state.webcam_active:
-        st.markdown("---")
-        st.markdown('<div class="exercise-title"><h3>🎥 Live Pose Detection</h3></div>', unsafe_allow_html=True)
+        process_webcam_feed(exercise)
+
+def process_webcam_feed(exercise):
+    """Process real-time webcam feed for pose estimation"""
+    st.markdown("---")
+    st.markdown('<div class="exercise-title"><h3>🎥 Live Pose Detection</h3></div>', unsafe_allow_html=True)
+    
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 30)
+    
+    video_placeholder = st.empty()
+    
+    while st.session_state.webcam_active:
+        ret, frame = cap.read()
+        if not ret:
+            st.error("Camera error")
+            break
         
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
+        # Process frame with MediaPipe
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = pose.process(image)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
-        video_placeholder = st.empty()
+        if results.pose_landmarks:
+            process_pose_landmarks(results.pose_landmarks, exercise, image)
+            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
         
-        while st.session_state.webcam_active:
-            ret, frame = cap.read()
-            if not ret:
-                st.error("Camera error")
-                break
+        # Display counter on frame
+        cv2.putText(image, f"Reps: {st.session_state.counter}", (10, 30), 
+                   cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 0, 0), 2)
+        
+        # Show frame
+        video_placeholder.image(image, channels="BGR")
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+def process_pose_landmarks(landmarks, exercise, image):
+    """Process pose landmarks for specific exercises"""
+    try:
+        # Get key points
+        shoulder = landmarks.landmark[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        hip = landmarks.landmark[mp_pose.PoseLandmark.LEFT_HIP.value]
+        knee = landmarks.landmark[mp_pose.PoseLandmark.LEFT_KNEE.value]
+        ankle = landmarks.landmark[mp_pose.PoseLandmark.LEFT_ANKLE.value]
+        wrist = landmarks.landmark[mp_pose.PoseLandmark.LEFT_WRIST.value]
+        
+        if exercise == "Squats":
+            knee_angle = calculate_angle(hip, knee, ankle)
+            if knee_angle > 160:
+                st.session_state.squat_stage = "up"
+            if knee_angle < 90 and st.session_state.squat_stage == "up":
+                st.session_state.squat_stage = "down"
+                st.session_state.counter += 1
             
-            # Process frame with MediaPipe
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(image)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            feedback = "Lower!" if knee_angle < 90 else "Good!" if knee_angle > 160 else ""
+            cv2.putText(image, feedback, (image.shape[1] - 200, 50), 
+                       cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255) if knee_angle < 90 else (0, 255, 0), 2)
+
+        elif exercise == "Hand Raises":
+            if wrist.y < shoulder.y:
+                if st.session_state.handraise_stage != "up":
+                    st.session_state.handraise_stage = "up"
+                    st.session_state.counter += 1
+            else:
+                st.session_state.handraise_stage = "down"
             
-            try:
-                landmarks = results.pose_landmarks.landmark
-                
-                # Get coordinates for key points
-                shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
-                hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
-                knee = landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value]
-                ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
-                wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
-                elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value]
+            feedback = "Raised!" if wrist.y < shoulder.y else "Lower Hands!"
+            cv2.putText(image, feedback, (image.shape[1] - 200, 100), 
+                       cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0) if wrist.y < shoulder.y else (0, 0, 255), 2)
 
-                # Exercise-specific logic
-                if exercise == "Squats":
-                    knee_angle = calculate_angle(hip, knee, ankle)
-                    if knee_angle > 160:
-                        st.session_state.squat_stage = "up"
-                    if knee_angle < 90 and st.session_state.squat_stage == "up":
-                        st.session_state.squat_stage = "down"
-                        st.session_state.counter += 1
-                    if knee_angle < 90:
-                        cv2.putText(image, "Lower!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255), 2)
-                    elif knee_angle > 160:
-                        cv2.putText(image, "Good!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0), 2)
+    except Exception as e:
+        st.error(f"Pose processing error: {e}")
 
-                elif exercise == "Hand Raises":
-                    if wrist.y < shoulder.y:
-                        if st.session_state.handraise_stage != "up":
-                            st.session_state.handraise_stage = "up"
-                            st.session_state.counter += 1
-                    else:
-                        st.session_state.handraise_stage = "down"
-                    if wrist.y < shoulder.y:
-                        cv2.putText(image, "Raised!", (image.shape[1] - 200, 100), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0), 2)
-                    else:
-                        cv2.putText(image, "Lower Hands!", (image.shape[1] - 200, 100), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255), 2)
-
-                elif exercise == "Yoga - Tree Pose":
-                    raised_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
-                    standing_knee = landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value]
-                    standing_hip = landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value]
-
-                    if (raised_ankle.y > standing_knee.y and 
-                        abs(raised_ankle.x - standing_hip.x) < 0.1):
-                        cv2.putText(image, "Good Pose!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0), 2)
-                        if 'tree_pose_start_time' not in st.session_state:
-                            st.session_state.tree_pose_start_time = time.time()
-                        if time.time() - st.session_state.tree_pose_start_time >= 2:
-                            st.session_state.counter += 1
-                            st.session_state.tree_pose_start_time = None
-                    else:
-                        cv2.putText(image, "Adjust Pose!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255), 2)
-                        st.session_state.tree_pose_start_time = None
-
-                elif exercise == "Yoga - Warrior II":
-                    front_knee = landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value]
-                    front_ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
-                    knee_angle = calculate_angle(hip, front_knee, front_ankle)
-
-                    if 80 < knee_angle < 100:
-                        cv2.putText(image, "Good Pose!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 255, 0), 2)
-                        if 'warrior_pose_start_time' not in st.session_state:
-                            st.session_state.warrior_pose_start_time = time.time()
-                        if time.time() - st.session_state.warrior_pose_start_time >= 2:
-                            st.session_state.counter += 1
-                            st.session_state.warrior_pose_start_time = None
-                    else:
-                        cv2.putText(image, "Adjust Pose!", (image.shape[1] - 200, 50), 
-                                   cv2.FONT_HERSHEY_TRIPLEX, 0.9, (0, 0, 255), 2)
-                        st.session_state.warrior_pose_start_time = None
-
-            except Exception as e:
-                pass
-
-            # Draw pose landmarks
-            if results.pose_landmarks:
-                mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-
-            # Display counter on frame
-            cv2.putText(image, f"Reps: {st.session_state.counter}", (10, 30), 
-                       cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 0, 0), 2)
-
-            # Show frame
-            video_placeholder.image(image, channels="BGR")
-
-            # Exit on 'q' key
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-        cap.release()
-        cv2.destroyAllWindows()
-
-# Main App Logic
+# Main Application
 def main():
+    # Initialize database if needed
+    if not os.path.exists(DB_PATH):
+        initialize_database()
+    
     set_page_config()
     
     # Initialize session state

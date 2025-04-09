@@ -1,74 +1,65 @@
-<<<<<<< HEAD
 import sqlite3
+import os
+from hashlib import sha256
 
-def initialize_db():
-    """
-    Initialize the SQLite database and create the users table.
-    """
-    # Connect to SQLite database (or create it if it doesn't exist)
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
+def initialize_database():
+    """Initialize the SQLite database with proper tables and security."""
+    # Use absolute path for reliability across environments
+    db_path = os.path.join(os.path.dirname(__file__), "users.db")
+    
+    try:
+        # Establish database connection
+        connection = sqlite3.connect(db_path)
+        cursor = connection.cursor()
 
-    # Create a table to store user credentials
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL
-    )
-    ''')
+        # Create users table with enhanced security
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP
+        )
+        ''')
 
-    # Insert a sample user (for testing)
-    cursor.execute('''
-    INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)
-    ''', ('admin', 'password'))  # In a real app, hash the password!
+        # Create sessions table for enhanced functionality
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        ''')
 
-    # Commit changes and close the connection
-    conn.commit()
+        # Insert default admin user with hashed credentials
+        salt = os.urandom(16).hex()
+        default_password = "admin@123"  # CHANGE THIS IN PRODUCTION
+        hashed_password = sha256((default_password + salt).encode()).hexdigest()
+        
+        cursor.execute('''
+        INSERT OR IGNORE INTO users (username, password_hash, salt)
+        VALUES (?, ?, ?)
+        ''', ('admin', hashed_password, salt))
 
-    # Verify the table and data
-    cursor.execute('SELECT * FROM users')
-    users = cursor.fetchall()
-    print("Users in the database:", users)
+        connection.commit()
+        print(f"✅ Database initialized successfully at {db_path}")
 
-    conn.close()
+    except sqlite3.Error as error:
+        print(f"❌ Database error: {error}")
+    finally:
+        if connection:
+            connection.close()
+
+def get_db_connection():
+    """Establish and return a database connection."""
+    db_path = os.path.join(os.path.dirname(__file__), "users.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row  # Enable dictionary-style access
+    return conn
 
 if __name__ == "__main__":
-=======
-import sqlite3
-
-def initialize_db():
-    """
-    Initialize the SQLite database and create the users table.
-    """
-    # Connect to SQLite database (or create it if it doesn't exist)
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-
-    # Create a table to store user credentials
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL
-    )
-    ''')
-
-    # Insert a sample user (for testing)
-    cursor.execute('''
-    INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)
-    ''', ('admin', 'password'))  # In a real app, hash the password!
-
-    # Commit changes and close the connection
-    conn.commit()
-
-    # Verify the table and data
-    cursor.execute('SELECT * FROM users')
-    users = cursor.fetchall()
-    print("Users in the database:", users)
-
-    conn.close()
-
-if __name__ == "__main__":
->>>>>>> e8f628ac6b92ca3977e14fe94bfd4b4080450892
-    initialize_db()
+    initialize_database()
