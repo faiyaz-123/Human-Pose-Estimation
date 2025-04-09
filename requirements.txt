@@ -1,13 +1,5 @@
-<<<<<<< HEAD
-streamlit
-opencv-python
-mediapipe
-numpy
-sqlite3
-=======
 streamlit==1.32.2
 opencv-python-headless==4.9.0.80
 mediapipe==0.10.21
 numpy==1.26.4
 protobuf==3.20.3
->>>>>>> e8f628ac6b92ca3977e14fe94bfd4b4080450892
